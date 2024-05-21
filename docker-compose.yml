@@ -1,0 +1,8 @@
+version: '3.8'
+
+services:
+  tesseract-ocr:
+    build: .
+    volumes:
+      - .:/app
+    command: python ocr_script.py image.png
