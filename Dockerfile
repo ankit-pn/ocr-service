@@ -27,4 +27,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/4.00/tessdata
 
 # Run ocr_script.py when the container launches
-CMD ["python", "ocr_service.ppy"]
+CMD ["python", "ocr_service.py"]

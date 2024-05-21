@@ -7,7 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from threading import Timer
-
+from concurrent.futures import Executor
+import json
 # Configuration
 images_directory = "/app/images"
 ocr_threads = int(os.getenv("OCR_THREADS", 4))
@@ -50,14 +51,14 @@ def process_image(image_path):
     # Check if the image has already been processed
     response = requests.get(redis_get_url, headers=headers, json=data)
     if response.status_code == 200:
-        print(f"Image {filename} has already been processed.")
+#        print(f"Image {filename} has already been processed.")
         return
     
     # Perform OCR
     try:
         img = Image.open(image_path)
         text = pytesseract.image_to_string(img, lang='eng+hin')
-        print(f"OCR for {filename}: {text}")
+#        print(f"OCR for {filename}: {text}")
         headers = {
             "accept": "application/json",
             "Content-Type": "application/json"
@@ -71,20 +72,27 @@ def process_image(image_path):
         }
         post_response = requests.post(redis_set_url,headers=headers, json=post_data)
         if post_response.status_code == 200:
-            print(f"OCR data for {filename} posted successfully.")
+#            print(f"OCR data for {filename} posted successfully.")
             processed_images_count += 1
         else:
             print(f"Failed to post OCR data for {filename}: {post_response.text}")
     except Exception as e:
         print(f"Error processing {filename}: {e}")
 
-def scan_directory(executor, path):
+def scan_directory(executor: Executor, path: str):
     global total_images_count
+    valid_extensions = ('.jpg', '.jpeg', '.png')  # Define allowed image formats
+    
     for root, dirs, files in os.walk(path, topdown=True):
         for name in files:
-            file_path = os.path.join(root, name)
-            executor.submit(process_image, file_path)
-            total_images_count += 1
+            if name.lower().endswith(valid_extensions):  # Check if the file is a valid image format
+                file_path = os.path.join(root, name)
+                executor.submit(process_image, file_path)
+                total_images_count += 1
+            else:
+                continue
+               # print(f"Ignored non-image file: {name}")  # Optional: log ignored files
+
         for name in dirs:
             dir_path = os.path.join(root, name)
             if not os.access(dir_path, os.R_OK):
@@ -130,6 +138,7 @@ def send_notification():
     Timer(3600, send_notification).start()
     
 if __name__ == "__main__":
+    print("Processes has started")
     executor = ThreadPoolExecutor(max_workers=ocr_threads)
 
     # Initial scan of all directories and subdirectories
