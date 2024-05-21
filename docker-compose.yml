@@ -5,4 +5,4 @@ services:
     build: .
     volumes:
       - .:/app
-    command: python ocr_script.py image.png
+    command: python ocr_script.py
