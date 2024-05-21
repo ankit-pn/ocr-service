@@ -1,44 +1,156 @@
-from PIL import Image, ImageDraw, ImageFont
+import os
+import time
+import requests
 import pytesseract
+from PIL import Image
+from concurrent.futures import ThreadPoolExecutor
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+from threading import Timer
 
-def create_sample_image(image_path):
-    # Create an image with white background
-    img = Image.new('RGB', (300, 150), color=(255, 255, 255))
+# Configuration
+images_directory = "/app/images"
+ocr_threads = int(os.getenv("OCR_THREADS", 4))
+redis_api_password = os.getenv("REDIS_API_PASSWORD")
+redis_api_domain = os.getenv("REDIS_API_DOMAIN")
+notification_api_domain=os.getenv("NOTIFICATION_API_DOMAIN")
 
-    # Initialize ImageDraw
-    d = ImageDraw.Draw(img)
+redis_get_url = f"https://{redis_api_domain}/get/"
+redis_set_url = f"https://{redis_api_domain}/set/"
+notify_url = f"http://host.docker.internal:8117/notify"
+dbsize_url = f"https://{redis_api_domain}/dbsize/"
 
-    # Add English text to image
-    d.text((10, 10), "Hello World", fill=(0, 0, 0))
+processed_images_count = 0
+total_images_count = 0
 
-    # Add Hindi text to image
-    hindi_text = "नमस्ते दुनिया"
-    d.text((10, 50), hindi_text, fill=(0, 0, 0))
 
-    # Save the image
-    img.save(image_path)
+class ImageHandler(FileSystemEventHandler):
+    def __init__(self, executor):
+        self.executor = executor
 
-def perform_ocr(image_path, languages='eng+hin'):
+    def on_created(self, event):
+        if event.is_directory:
+            return
+        self.executor.submit(process_image, event.src_path)
+        update_total_images_count()
+
+def process_image(image_path):
+    global processed_images_count
+    filename = os.path.basename(image_path)
+    key = os.path.splitext(filename)[0]
+    headers = {
+        "accept": "application/json",
+        "Content-Type": "application/json"
+    } 
+    data = {
+        "key": key,
+        "db": 0,
+        "password": redis_api_password
+    }
+    # Check if the image has already been processed
+    response = requests.get(redis_get_url, headers=headers, json=data)
+    if response.status_code == 200:
+        print(f"Image {filename} has already been processed.")
+        return
+    
+    # Perform OCR
     try:
-        # Open the image file
-        print(f"Opening image file: {image_path}")
         img = Image.open(image_path)
-        
-        # Perform OCR on the image with the specified languages
-        print(f"Performing OCR with languages: {languages}")
-        text = pytesseract.image_to_string(img, lang=languages)
-        
-        print(f"Raw OCR output: {text}")
-        return text
+        text = pytesseract.image_to_string(img, lang='eng+hin')
+        print(f"OCR for {filename}: {text}")
+        headers = {
+            "accept": "application/json",
+            "Content-Type": "application/json"
+        }
+        # Post OCR data to an API (example endpoint)
+        post_data = {
+            "key": key,
+            "value": text,
+            "db": 0,
+            "password": redis_api_password
+        }
+        post_response = requests.post(redis_set_url,headers=headers, json=post_data)
+        if post_response.status_code == 200:
+            print(f"OCR data for {filename} posted successfully.")
+            processed_images_count += 1
+        else:
+            print(f"Failed to post OCR data for {filename}: {post_response.text}")
     except Exception as e:
-        return str(e)
+        print(f"Error processing {filename}: {e}")
 
+def scan_directory(executor, path):
+    global total_images_count
+    for root, dirs, files in os.walk(path, topdown=True):
+        for name in files:
+            file_path = os.path.join(root, name)
+            executor.submit(process_image, file_path)
+            total_images_count += 1
+        for name in dirs:
+            dir_path = os.path.join(root, name)
+            if not os.access(dir_path, os.R_OK):
+                print(f"Permission denied: {dir_path}")
+                continue
+
+def update_total_images_count():
+    global total_images_count
+    total_images_count = sum([len(files) for r, d, files in os.walk(images_directory)])
+
+def send_notification():
+    global processed_images_count, total_images_count
+    try:
+        headers = {
+            "accept": "application/json",
+            "Content-Type": "application/json"
+        } 
+        # Get total number of processed images from the database
+        response = requests.get(dbsize_url,headers=headers, json={"password": redis_api_password})
+        if response.status_code == 200:
+            total_processed_images = response.json().get('dbsize', 0)
+        else:
+            total_processed_images = 0
+
+        # Notify API
+        notify_data = {
+            "processed_images_count": processed_images_count,
+            "total_images_count": total_images_count,
+            "total_processed_images": total_processed_images
+        }
+        notify_response = requests.post(notify_url, json=notify_data)
+        if notify_response.status_code == 200:
+            print("Notification sent successfully.")
+        else:
+            print(f"Failed to send notification: {notify_response.text}")
+
+        # Reset the counter for the next hour
+        processed_images_count = 0
+    except Exception as e:
+        print(f"Error sending notification: {e}")
+
+    # Schedule the next notification
+    Timer(3600, send_notification).start()
+    
 if __name__ == "__main__":
-    image_path = "/app/sample_image.png"
-    print(f"Creating sample image at: {image_path}")
+    executor = ThreadPoolExecutor(max_workers=ocr_threads)
+
+    # Initial scan of all directories and subdirectories
+    scan_directory(executor, images_directory)
+
+    event_handler = ImageHandler(executor)
+    observer = Observer()
+    observer.schedule(event_handler, path=images_directory, recursive=True)
     
-    create_sample_image(image_path)
+    observer.start()
+    print(f"Started monitoring {images_directory} with {ocr_threads} threads.")
+
+    # Update the total image count initially
+    update_total_images_count()
+
+    # Start the notification timer
+    Timer(3600, send_notification).start()
     
-    ocr_text = perform_ocr(image_path)
-    print("OCR Text:\n")
-    print(ocr_text)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+    observer.join()

@@ -1,8 +1,14 @@
 version: '3.8'
 
 services:
-  tesseract-ocr:
+  ocr-service:
     build: .
     volumes:
-      - .:/app
-    command: python ocr_script.py
+      - /path/on/host:/app/images
+    extra_hosts:
+      - "host.docker.internal:172.31.46.68"
+    environment:
+      - REDIS_API_PASSWORD=your_password
+      - OCR_THREADS=20  # Number of CPU threads for OCR
+      - REDIS_API_DOMAIN=redis.dbackup.cloud  # The domain of your API
+    command: ["python", "ocr_service.py"]
