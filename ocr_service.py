@@ -92,7 +92,6 @@ def scan_directory(executor: Executor, path: str):
             if name.lower().endswith(valid_extensions):  # Check if the file is a valid image format
                 file_path = os.path.join(root, name)
                 executor.submit(process_image, file_path)
-                total_images_count += 1
             else:
                 continue
                # print(f"Ignored non-image file: {name}")  # Optional: log ignored files
@@ -105,7 +104,11 @@ def scan_directory(executor: Executor, path: str):
 
 def update_total_images_count():
     global total_images_count
-    total_images_count = sum([len(files) for r, d, files in os.walk(images_directory)])
+    image_extensions = ['.jpg', '.jpeg', '.png']
+    total_images_count = sum(
+        len([file for file in files if os.path.splitext(file)[1].lower() in image_extensions])
+        for r, d, files in os.walk(images_directory)
+    )
 
 def send_notification():
     global processed_images_count, total_images_count
@@ -144,7 +147,8 @@ def send_notification():
 if __name__ == "__main__":
     print("Processes has started")
     executor = ThreadPoolExecutor(max_workers=ocr_threads)
-
+    
+    Timer(3600, send_notification).start()
     # Initial scan of all directories and subdirectories
     scan_directory(executor, images_directory)
 
@@ -159,7 +163,7 @@ if __name__ == "__main__":
     update_total_images_count()
 
     # Start the notification timer
-    Timer(3600, send_notification).start()
+    
     
     try:
         while True:
