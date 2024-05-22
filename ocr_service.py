@@ -25,6 +25,7 @@ processed_images_count = 0
 total_images_count = 0
 
 
+
 class ImageHandler(FileSystemEventHandler):
     def __init__(self, executor):
         self.executor = executor
@@ -32,8 +33,11 @@ class ImageHandler(FileSystemEventHandler):
     def on_created(self, event):
         if event.is_directory:
             return
-        self.executor.submit(process_image, event.src_path)
-        update_total_images_count()
+        # Extract file extension and check if it's an image file
+        _, file_extension = os.path.splitext(event.src_path)
+        if file_extension.lower() in ['.jpg', '.jpeg', '.png']:
+            self.executor.submit(process_image, event.src_path)
+            update_total_images_count()
 
 def process_image(image_path):
     global processed_images_count
@@ -111,7 +115,7 @@ def send_notification():
             "Content-Type": "application/json"
         } 
         # Get total number of processed images from the database
-        response = requests.get(dbsize_url,headers=headers, json={"password": redis_api_password})
+        response = requests.get(dbsize_url,headers=headers, json={"password": redis_api_password,"db":0})
         if response.status_code == 200:
             total_processed_images = response.json().get('dbsize', 0)
         else:
